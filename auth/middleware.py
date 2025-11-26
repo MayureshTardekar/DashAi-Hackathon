@@ -1,6 +1,7 @@
 """
 Auth middleware for Production V1
 """
+import os
 from functools import wraps
 from flask import request, jsonify, g
 from auth.jwt_handler import decode_token
@@ -20,6 +21,14 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # ⚠️ DEV MODE BYPASS - Skip auth if DEV_DISABLE_AUTH=true
+        if os.getenv('DEV_DISABLE_AUTH', 'false').lower() == 'true':
+            # Create mock user context for testing
+            g.user_id = 1
+            g.wallet_address = '0xDEV_TEST_WALLET'
+            print("⚠️ AUTH BYPASSED - Using mock user_id=1")
+            return f(*args, **kwargs)
+        
         # Extract token from Authorization header
         auth_header = request.headers.get('Authorization', '')
         
