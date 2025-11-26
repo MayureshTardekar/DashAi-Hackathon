@@ -1,37 +1,22 @@
 """
-Simple PostgreSQL connection for Production V1
-Auto-fallback to SQLite if PostgreSQL unavailable
+SQLite connection for local development
+Simple, always-works database setup
 """
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.ext.declarative import declarative_base
 
-# Load from environment
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/ml_analytics')
+# Use SQLite by default for local dev
+DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///ml_analytics.db')
 
-# Try PostgreSQL, fallback to SQLite
-try:
-    # Create engine
-    engine = create_engine(
-        DATABASE_URL,
-        pool_size=5,
-        max_overflow=10,
-        pool_pre_ping=True  # Verify connections before use
-    )
-    # Test connection
-    with engine.connect() as conn:
-        conn.execute("SELECT 1")
-    print("✅ Connected to PostgreSQL")
-except Exception as e:
-    print(f"⚠️ PostgreSQL unavailable: {e}")
-    print("⚠️ Falling back to SQLite...")
-    DATABASE_URL = 'sqlite:///ml_analytics.db'
-    engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True
-    )
-    print("✅ Using SQLite fallback")
+# Create engine
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    connect_args={'check_same_thread': False} if 'sqlite' in DATABASE_URL else {}
+)
+print(f"✅ Using database: {DATABASE_URL}")
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
