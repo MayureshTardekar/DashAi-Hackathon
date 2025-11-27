@@ -296,28 +296,61 @@ def dashboard():
         # Load user's data
         df, upload = load_user_data(user_id)
         if df is None:
-            return jsonify({'error': 'No data uploaded yet. Please upload a CSV file.'}), 404
+            # Return empty structure instead of error - allows UI to render
+            return jsonify({
+                'success': True,
+                'data': {
+                    'total_forecast': 0,
+                    'forecast': {
+                        'totalForecast': 0,
+                        'historical': [],
+                        'forecast': [],
+                        'accuracy': {
+                            'accuracy': 0,
+                            'mape': 0,
+                            'rmse': 0,
+                            'r2': 0,
+                            'confidence': 'UNKNOWN'
+                        }
+                    },
+                    'countries': [],
+                    'products': [],
+                    'rfm': {
+                        'available': False,
+                        'segmentCounts': {},
+                        'topCustomers': []
+                    },
+                    'hash': 'No Data',
+                    'metric_label': 'Metric',
+                    'capabilities': {
+                        'hasProducts': False,
+                        'hasRegions': False,
+                        'hasCustomers': False
+                    },
+                    'years': []
+                }
+            })
         
-        # Get parameters
-        date_range = request.args.get('date_range')
-        forecast_horizon = int(request.args.get('horizon', 4))
+        # Get parameters from query string (not date_range)
+        from_date = request.args.get('from')
+        to_date = request.args.get('to')
+        forecast_horizon = int(request.args.get('forecast_horizon', 4))
         
         if forecast_horizon < 1 or forecast_horizon > 52:
             return jsonify({'error': 'Horizon must be between 1 and 52 weeks'}), 400
         
         # Filter by date range if provided
         df_filtered = df.copy()
-        if date_range:
+        if from_date and to_date:
             try:
-                range_data = json.loads(date_range)
-                start_date = pd.to_datetime(range_data['from'])
-                end_date = pd.to_datetime(range_data['to'])
+                start_date = pd.to_datetime(from_date)
+                end_date = pd.to_datetime(to_date)
                 df_filtered = df_filtered[
                     (df_filtered['InvoiceDate'] >= start_date) &
                     (df_filtered['InvoiceDate'] <= end_date)
                 ]
-            except:
-                pass
+            except Exception as e:
+                print(f"Date filtering error: {e}")
         
         # Generate forecast
         forecast_result = generate_ml_forecast(df_filtered, horizon=forecast_horizon)
@@ -374,22 +407,59 @@ def dashboard():
             }
         )
         
-        # Build response
+        # Build response matching frontend DashboardData interface
         metric_label = _format_metric_label(upload.column_mapping.get('value') if upload.column_mapping else 'TotalAmount')
         
+        # Calculate KPIs
+        total_value = float(df_filtered['TotalAmount'].sum())
+        avg_per_week = float(total_value / max(1, len(forecast_result.get('historical', []))))
+        transaction_count = len(df_filtered)
+        
+        # Get RFM details for frontend
+        rfm_segment_counts = {}
+        top_customers = []
+        if rfm_data.get('available'):
+            for seg in rfm_data.get('segments', []):
+                rfm_segment_counts[seg['segment']] = seg['count']
+        
         return jsonify({
-            'forecast': forecast_result.get('forecast', []),
-            'accuracy': forecast_result.get('accuracy', {}),
-            'countries': countries_data,
-            'products': products_data,
-            'rfm': rfm_data,
-            'metricLabel': metric_label,
-            'availableYears': list(df['InvoiceDate'].dt.year.unique()),
-            'rootCause': forecast_result.get('root_cause'),
-            'upload_info': {
-                'filename': upload.original_filename,
-                'uploaded_at': upload.created_at.isoformat(),
-                'row_count': upload.row_count
+            'success': True,
+            'data': {
+                'total_forecast': forecast_result.get('totalForecast', 0),
+                'forecast': {
+                    'totalForecast': forecast_result.get('totalForecast', 0),
+                    'historical': forecast_result.get('historical', []),
+                    'forecast': forecast_result.get('forecast', []),
+                    'accuracy': forecast_result.get('accuracy', {})
+                },
+                'countries': countries_data,
+                'products': products_data,
+                'rfm': {
+                    'available': rfm_data.get('available', False),
+                    'segmentCounts': rfm_segment_counts,
+                    'topCustomers': top_customers
+                },
+                'hash': forecast_result.get('hash', 'N/A'),
+                'metric_label': metric_label,
+                'capabilities': {
+                    'hasProducts': len(products_data) > 0,
+                    'hasRegions': len(countries_data) > 0,
+                    'hasCustomers': rfm_data.get('available', False)
+                },
+                'root_cause': forecast_result.get('root_cause'),
+                'years': sorted(df['InvoiceDate'].dt.year.unique().tolist()),
+                'kpi': {
+                    'total_value': total_value,
+                    'growth_percent': 0.0,  # TODO: Calculate vs previous period
+                    'avg_per_week': avg_per_week,
+                    'transaction_count': transaction_count
+                },
+                'column_mapping': upload.column_mapping if upload.column_mapping else {},
+                'date_range': {
+                    'from': df_filtered['InvoiceDate'].min().isoformat() if len(df_filtered) > 0 else None,
+                    'to': df_filtered['InvoiceDate'].max().isoformat() if len(df_filtered) > 0 else None
+                },
+                'dataset_name': upload.original_filename
             }
         })
         
@@ -397,6 +467,7 @@ def dashboard():
         print(f"❌ Dashboard error: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
         
         AuditLog.log(
             user_id=user_id,
@@ -433,6 +504,29 @@ def reset_file():
         )
     
     return jsonify({'success': True, 'message': 'Upload reset successfully'})
+
+
+@app.route('/api/current-file')
+@require_auth
+def current_file():
+    """Get current file info"""
+    user_id = g.user_id
+    upload = get_user_latest_upload(user_id)
+    
+    if upload:
+        return jsonify({
+            'success': True,
+            'filename': upload.original_filename,
+            'is_default': False,
+            'uploaded_at': upload.created_at.isoformat(),
+            'row_count': upload.row_count
+        })
+    else:
+        return jsonify({
+            'success': True,
+            'filename': 'No file uploaded',
+            'is_default': True
+        })
 
 
 @app.route('/health')

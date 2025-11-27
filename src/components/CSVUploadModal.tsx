@@ -48,9 +48,13 @@ export const CSVUploadModal = ({ isOpen, onClose, onUploadSuccess, currentFile, 
 
       if (result.success) {
         toast.success('CSV uploaded successfully!');
+        
+        // Check if mapping is required
+        const needsMapping = result.requires_mapping || (result.detected_columns && result.detected_columns.length > 0);
+        
         onUploadSuccess(
           result.date_range,
-          result.unmapped_columns,
+          needsMapping ? result.detected_columns : undefined,
           result.filename,
           result.suggested_mapping,
           result.confidence
